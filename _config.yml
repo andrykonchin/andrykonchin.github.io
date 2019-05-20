@@ -1,5 +1,5 @@
-name: Your New Jekyll Site
-description: Blogging about stuffs
+name: Aaz on software
+description: Blogging about tech stuffs
 meta_description: "Your New Jekyll Site, Blogging about stuffs"
 
 markdown: kramdown
@@ -13,4 +13,4 @@ gems: [jekyll-paginate]
 
 # Details for the RSS feed generator
 url:            'blog url'
-author:         'Your Name'
+author:         'Andrew Konchin'
