@@ -764,7 +764,7 @@ body:not(.post-template) .post-title {
 
 .post-meta {
     display: block;
-    margin: 1.75rem 0 0 0;
+    margin: 1.75rem 0 1.75rem 0;
     font-family: "Open Sans", sans-serif;
     font-size: 1.5rem;
     line-height: 2.2rem;
@@ -898,6 +898,17 @@ body:not(.post-template) .post-title {
     max-width: none;
     margin: 0 -13%;
 }
+
+/* Customisation begin */
+.post-content p {
+  text-align: justify;
+}
+
+.post-content h4 {
+  margin-bottom: 1.75em;
+}
+
+/* Customisation end */
 
 /* The author credit area after the post */
 .post-footer {
