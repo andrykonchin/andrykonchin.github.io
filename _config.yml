@@ -8,7 +8,7 @@ logo: false
 paginate: 15
 baseurl: / # Doesn't work in placeholders - {{site.baseurl}} => ''
 domain_name: 'https://andrykonchin.github.io'
-google_analytics: 'UA-XXXXXXXX-X'
+google_analytics: 'UA-141523137-1'
 gems: [jekyll-paginate]
 
 # Details for the RSS feed generator
