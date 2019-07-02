@@ -387,6 +387,45 @@ Process.clock_gettime(Process::CLOCK_MONOTONIC)
 
 
 
+#### Пример. Переоткрытие лог-файла
+
+Давайте разберем как Unicorn переоткрывает лог-файлы при получении сигнала `USR1`. Здесь применяется метод `IO#reopen`, который ассоциирует существующий Ruby-объект файл с новым файлом.
+
+В приведенном примере строка `'First line'` записывается в файл 'development.log'. Затем этот файл перемещается но строка `'Second line'` все еще дописывается в этот перемещенный файл 'archive/development.log.1'. Далее файл переоткрывается используя метод `File#reopen` и следующая строка `'Third line'` записывается в новый файл 'development.log'.
+
+Таким образом, "заархивированный" файл содержит первую и вторую строку, а созданный после переоткрытия файл содержит третью. Получается, что файл переместился незаметно для приложения и все лог-записи сохранились.
+
+```ruby
+# reopen.rb
+
+require 'fileutils'
+
+file = File.open('development.log', 'a')
+file.puts('First line')
+
+FileUtils.mkdir('archive')
+FileUtils.mv(file.path, 'archive/development.log.1')
+file.puts('Second line')
+
+file.reopen(file.path, 'a')
+file.puts('Third line')
+
+file.close
+```
+
+```shell
+# shell
+
+> cat archive/development.log.1
+First line
+Second line
+
+> cat development.log
+Third line
+```
+
+
+
 ### Перезапуск master процесса
 
 ```
