@@ -20,7 +20,7 @@ extra_head: |
 Account.create(name: 'KFC')
 ```
 
-```SQL
+```sql
 BEGIN
   INSERT INTO "accounts" ("name") VALUES ($1) RETURNING "id"  [["name", "KFC"]]
 COMMIT
@@ -37,7 +37,7 @@ Account.create(
 )
 ```
 
-```SQL
+```sql
 BEGIN
   INSERT INTO "accounts" ("name") VALUES ($1) RETURNING "id"  [["name", "KFC"]]
   INSERT INTO "payments" ("amount", "account_id") VALUES ($1, $2) RETURNING "id"  [["amount", "10.0"], ["account_id", 1]]
@@ -55,7 +55,7 @@ ActiveRecord::Base.transaction do
 end
 ```
 
-```SQL
+```sql
 BEGIN
   INSERT INTO "accounts" ("name") VALUES ($1) RETURNING "id"  [["name", "KFC"]]
 COMMIT
@@ -73,7 +73,7 @@ ActiveRecord::Base.transaction do
 end
 ```
 
-```SQL
+```sql
 BEGIN
   INSERT INTO "accounts" ("name") VALUES ($1) RETURNING "id"  [["name", "KFC"]]
 COMMIT
@@ -104,7 +104,7 @@ ActiveRecord::Base.transaction do
 end
 ```
 
-```SQL
+```sql
 BEGIN
   INSERT INTO "accounts" ("name") VALUES ($1) RETURNING "id"  [["name", "KFC"]]
 
@@ -125,7 +125,7 @@ ActiveRecord::Base.transaction(joinable: false) do
 end
 ```
 
-```SQL
+```sql
 BEGIN
   SAVEPOINT active_record_1
   INSERT INTO "accounts" ("name") VALUES ($1) RETURNING "id"  [["name", "KFC"]]
@@ -147,7 +147,7 @@ ActiveRecord::Base.transaction(joinable: false) do
 end
 ```
 
-```SQL
+```sql
 BEGIN
   SAVEPOINT active_record_1
   SELECT  "accounts".* FROM "accounts" WHERE "accounts"."name" = $1 LIMIT $2  [["name", "KFC"], ["LIMIT", 1]]
@@ -167,7 +167,7 @@ ActiveRecord::Base.transaction(joinable: false) do
 end
 ```
 
-```SQL
+```sql
 BEGIN
   SAVEPOINT active_record_1
   SELECT  "accounts".* FROM "accounts" WHERE "accounts"."name" = $1 LIMIT $2  [["name", "KFC"], ["LIMIT", 1]]
@@ -187,7 +187,7 @@ ActiveRecord::Base.transaction do
 end
 ```
 
-```SQL
+```sql
 BEGIN
   INSERT INTO "accounts" ("name") VALUES ($1) RETURNING "id"  [["name", "KFC"]]
 ROLLBACK
@@ -206,7 +206,7 @@ ActiveRecord::Base.transaction do
 end
 ```
 
-```SQL
+```sql
 BEGIN
   INSERT INTO "accounts" ("name") VALUES ($1) RETURNING "id"  [["name", "KFC"]]
 
@@ -229,7 +229,7 @@ ActiveRecord::Base.transaction do
 end
 ```
 
-```SQL
+```sql
 BEGIN
   INSERT INTO "accounts" ("name") VALUES ($1) RETURNING "id"  [["name", "KFC"]]
 
@@ -252,7 +252,7 @@ ActiveRecord::Base.transaction do
 end
 ```
 
-```SQL
+```sql
 BEGIN
   INSERT INTO "accounts" ("name") VALUES ($1) RETURNING "id"  [["name", "KFC"]]
   INSERT INTO "accounts" ("name") VALUES ($1) RETURNING "id"  [["name", "McDonald's"]]
