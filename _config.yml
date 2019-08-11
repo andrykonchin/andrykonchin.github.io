@@ -3,7 +3,7 @@ description: Blogging about tech stuff
 meta_description: Blogging about tech stuff
 
 markdown: kramdown
-highlighter: pygments
+highlighter: rouge
 logo: false
 paginate: 15
 baseurl: / # Doesn't work in placeholders - {{site.baseurl}} => ''
