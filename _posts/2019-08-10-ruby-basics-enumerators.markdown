@@ -1,6 +1,6 @@
 ---
 layout:     post
-title:      "Ликбез по Enumerator"
+title:      "Ликбез по Enumerator в Ruby"
 date:       2019-08-10 20:04
 categories: Ruby
 ---
