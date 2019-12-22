@@ -585,7 +585,7 @@ end
 - <https://api.rubyonrails.org/classes/ActiveSupport/Notifications.html>
 
 
-#### Ссылки
+### Ссылки
 
 - <https://api.rubyonrails.org/classes/ActiveRecord/ConnectionAdapters/PostgreSQLAdapter.html>
 - <https://github.com/rails/rails/blob/5-2-stable/activerecord/lib/active_record/connection_adapters/postgresql_adapter.rb>
