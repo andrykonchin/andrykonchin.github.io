@@ -1,0 +1,21 @@
+@startuml
+
+participant Kernel
+participant "Parent process" as Parent
+participant "Child process" as Child
+participant Pipe
+
+hide footbox
+
+activate Parent
+
+Parent --> Child: fork
+
+activate Child
+
+Parent -> Kernel: wait for Child termination
+Child --> Child: run specs
+Child -> Pipe: write results
+
+@enduml
+
