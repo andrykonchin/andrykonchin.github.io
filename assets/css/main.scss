@@ -12,3 +12,9 @@
 @import
 	"syntax"
 ;
+
+// Make text visually more compact
+body {
+  font-size: 1.6rem;
+  line-height: 1.55em;
+}
