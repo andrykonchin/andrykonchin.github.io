@@ -904,6 +904,10 @@ body:not(.post-template) .post-title {
   text-align: justify;
 }
 
+.post-content h3 {
+  margin-bottom: 1.75em;
+}
+
 .post-content h4 {
   margin-bottom: 1.75em;
 }
