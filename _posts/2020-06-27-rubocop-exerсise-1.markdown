@@ -1,6 +1,6 @@
 ---
 layout:     post
-title:      Rubocop. Упражнение №1
+title:      Rubocop. Фиксим баг
 date:       2020-06-27 14:01
 categories: Ruby Rubocop
 ---
