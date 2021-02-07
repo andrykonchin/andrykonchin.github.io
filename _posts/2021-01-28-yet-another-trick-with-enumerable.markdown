@@ -15,15 +15,15 @@ categories: Ruby
 
 ### Конвенции Ruby
 
-Вначале немножко теории. Особо нетерпеливым можно перескакивать сразу на
-следующий раздел.
+Вначале немножко теории. Особо нетерпеливым можно пропустить и перейти к
+следующему разделу.
 
 В Ruby метод, который принимает блок, называют методом-итератором.
 Наверное потому, что такие методы как `each` или `each_slice`, которые
 принимают блок, формально относятся к внутренним итераторам.
 В противовес внешним итераторам, таким как класс `Enumerator` из
 _corelib_. Вероятней всего поэтому термин и перешел на все методы с
-аргументом блоком.
+аргументом-блоком.
 
 Так вот, в _corelib_ Ruby есть конвенция - любой метод-итератор можно
 вызвать без блока. В результате вернется _enumerator_, который можно
@@ -65,9 +65,8 @@ enum.map { |e| e.to_a.reverse }.reduce(:+)
 
 Более того, эта практика вышла за пределы _corelib_. Ее можно встретить
 и в сторонних библиотеках и фреймворках. Ей следуют, например, в Rails.
-
 Вот несколько таких методов:
-*  методы `find_each` и `find_in_batches` из [ActiveRecord](https://api.rubyonrails.org/classes/ActiveRecord/Batches.html), которые лениво загружают записи из таблицы
+*  `find_each` и `find_in_batches` из [ActiveRecord](https://api.rubyonrails.org/classes/ActiveRecord/Batches.html)
 * `each_pair`, `each_value`, `transform_values`, `transform_keys` из [ActionController::Parameters](https://api.rubyonrails.org/classes/ActionController/Parameters.html)
 * `index_by`, `index_with` из [Enumerable extension](https://api.rubyonrails.org/classes/Enumerable.html)
 * `each_record`, `each` из [ActiveRecord::Batches::BatchEnumerator](https://api.rubyonrails.org/classes/ActiveRecord/Batches/BatchEnumerator.html)
@@ -75,9 +74,9 @@ enum.map { |e| e.to_a.reverse }.reduce(:+)
 
 ### Заглянем под капот
 
-Вернемся к нашему трюку. Наткнулся я на него не совсем случайно. Мне
-нужно было разобраться как такие методы-итераторы реализованы в Rails. И
-заглянув в исходники я далеко не сразу понял как это работает.
+Вернемся к нашему трюку. Наткнулся я на него не совсем случайно - мне
+хотелось разобраться как такие методы-итераторы реализованы в Rails. И
+заглянув в исходники я понял как это работает далеко не сразу.
 
 Давайте посмотрим на метод `transform_keys!` из
 `ActionController::Parameters`
