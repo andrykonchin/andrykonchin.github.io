@@ -1,7 +1,7 @@
 ---
 layout:     post
 title:      Проблема с keyword arguments в Ruby 3.0
-date:       2021-02-06 22:34
+date:       2021-02-22 22:34
 categories: Ruby
 ---
 
