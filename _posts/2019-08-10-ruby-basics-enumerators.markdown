@@ -5,6 +5,8 @@ date:       2019-08-10 20:04
 categories: Ruby
 ---
 
+_Updated on May 1, 2021_
+
 В очередной раз обнаружил пробел в своих знаниях Ruby и пришлось срочно
 его заполнить. На этот раз объект изучения это класс `Enumerator`.
 
@@ -224,6 +226,22 @@ fib.take(10)
 => [1, 1, 2, 3, 5, 8, 13, 21, 34, 55]
 ```
 
+Еще один способ создать бесконечный _enumerator_ появился не так давно в
+Ruby 2.7 - метод `.produce`
+([documentation](https://ruby-doc.org/core-2.7.0/Enumerator.html#method-c-produce)).
+Метод возвращает `Enumerator`, который вычисляет элементы вызывая
+указанный блок:
+
+```ruby
+Enumerator.produce(1) { |prev| prev + 1 } # enumerator: 1, 2, 3, ...
+```
+
+Например, так можно создать бесконечную последовательность случайных
+чисел:
+
+```ruby
+Enumerator.produce { rand(100) }
+```
 
 ### Цепочки enumerator'ов
 
