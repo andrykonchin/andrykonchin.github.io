@@ -117,7 +117,9 @@ GEM
     nio4r (2.5.8)
     nokogiri (1.13.1-x86_64-darwin)
       racc (~> 1.4)
-    puma (5.6.1)
+    nokogiri (1.13.1-x86_64-linux)
+      racc (~> 1.4)
+    puma (5.6.4)
       nio4r (~> 2.0)
     racc (1.6.0)
     rack (2.2.3)
@@ -172,11 +174,12 @@ GEM
 
 PLATFORMS
   x86_64-darwin-18
+  x86_64-linux
 
 DEPENDENCIES
   data_migrate!
   debug
-  puma (~> 5.0)
+  puma (~> 5.6)
   rails (~> 7.0.1)
   sprockets-rails
   sqlite3 (~> 1.4)
