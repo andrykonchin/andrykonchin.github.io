@@ -5,28 +5,11 @@ date:       2019-12-25 00:09
 categories: Ruby
 ---
 
-Recently a fix of a bug in RSpec caught my eye ([_pull
-request_](https://github.com/rspec/rspec-core/pull/2669)). The issue was
-a deadlock of two processes that leads to hanging out. I couldn't pass
-by without diving into details - I don't see deadlock every day.
+I came across a pull request on GitHub that fixed a bug in RSpec ([_pull request_](https://github.com/rspec/rspec-core/pull/2669)). The bug caused two processes to deadlock, resulting in a RSpec hang. Since deadlocks are not a common occurrence for me, I was intrigued and decided to look into the details of the fix.
 
-RSpec supports a command line option `--bisect`
-([documentation](https://relishapp.com/rspec/rspec-core/docs/command-line/bisect)),
-that is useful deal with flacky failing specs. Sometimes spec failure
-depends on order of test cased and what cased were run before it (it's
-common to run specs suite in rundom order, probably to catch such
-things). In this case there is minimal sequence of test cases that
-causes a failure of the test case. It's exactly what `--bisect` can help
-you with. With this option RSpec reruns specs multiple times decreasing
-thier ammount by half and select that half what fails. To do so RSpec
-should every time run tests in isolation, that is in a new system
-process.
+RSpec provides a convenient command-line option called `--bisect` (as documented [here](https://relishapp.com/rspec/rspec-core/docs/command-line/bisect)) that can be used to handle flaky failing specs. Sometimes, the order in which test cases are run can impact whether a spec fails or passes. To catch such issues, it's common to run the spec suite in a random order. In such cases, `--bisect` can be used to identify the minimal sequence of test cases that cause a particular spec to fail. When you use this option, RSpec reruns specs multiple times, gradually reducing their number by half, until it identifies specs that is responsible for the failure. To achieve this, RSpec runs specs in isolation, in a new system process each time.
 
-Sometimes launching RSpec with `--bisect` ends up with hanging out. It
-was reported for the first time
-[here](https://github.com/rspec/rspec-core/issues/2637) by maintaners of
-the Puppet project. Moreover they have also investigated the issue and
-found out the cause:
+Occasionally, when launching RSpec with the `--bisect` option, it can result in a hanging process. This issue was first reported by the maintainers of the Puppet project in [this GitHub issue](https://github.com/rspec/rspec-core/issues/2637). Additionally, they conducted an investigation and identified the root cause of the problem.
 
 > Meanwhile the main process is hanging in waitpid at
 >
@@ -38,58 +21,31 @@ found out the cause:
 > parent continues happily reading from the buffer. In my case the
 > testsuite results are ~93kB and the processes deadlock.
 
-Let's figure out what is going on here.
+Now, let's investigate and try to understand what is happening here.
 
 
-### How `--bisect` does work
+### How `--bisect` works
 
-RSpec used two diffenent ways to run specs in a separate process - using
-*shell*-command, that leans to system calls `fork` + `exec`, or
-_forking_ its own process. In both cases new child process is created.
-In the first case result of specs running is written into _stdout_, that
-is available for the parent process. In the second case for passing data
-between child and parent processes RSpec uses system unnamed
-[pipe](https://linux.die.net/man/7/pipe). The problem happens only in
-the second case with `fork`.
+Let's delve into how `--bisect` actually works. RSpec leverages two methods to run specs in a separate process: using a Shell command, which utilizes system calls like `fork` and `exec`, or by _forking_ its own process. In either case, a new child process is spawned. In the first approach, the output from the specs run is written to _stdout_, which can be accessed by the parent process. In the second case, RSpec uses an unnamed [pipe](https://linux.die.net/man/7/pipe) to exchange data between the child and parent processes. The problem arises only when forking is used.
 
-To read and write into a pipe RSpec used blocking operations - the child
-process writes into the pipe data, and the parent process is waiting for
-the child process stopping and then read from the pipe. Let's look at
-this in details.
+When communicating through a pipe, RSpec relies on blocking operations. This means that the child process writes data into the pipe, while the parent process waits for the child process to _exit_ before reading from the pipe. Let's examine this process more closely.
 
-Blocking reading means, that if you need to read _n_ bytes but a pipe's
-buffer contains less bytes then reading operation will wait untill there
-are available require amount of bytes.
+Blocking reading means waiting until a certain number of bytes are available in a pipe's buffer before reading them. For example, if a process needs to read n bytes from the pipe, but the buffer currently contains less than n bytes, the reading operation will wait until the required number of bytes are available.
 
-Blocking writing means, that if you need to write _n_ bytes, but a pop's
-buffer doesn't have enough free space (a buffer has fixed and limited
-size) then writing operation will wait untill some data is read from a
-pipe and there is enough space to write _n_ bytes.
+Blocking writing means that if you need to write _n_ bytes, but the pipe's buffer does not have enough free space (as the buffer has a fixed and limited size), then the writing operation will wait until there is enough space in the buffer to write the _n_ bytes. This occurs after some data is read from the pipe to free enough space for the write operation.
 
-In our case the parent process makes the `waitpid` system call to wait
-for the child process terminating. When a process terminates - it
-becomes a _zombie_ process - system resources are freed, but a parent
-process still doesn't know about a child process termination. A parent
-process must get a status of a child process termitation by making the
-`waitpid` system call. Only then a child process is completely
-disappeared.
+In the case of using `fork`, the parent process uses the `waitpid` system call to wait for the child process to exit. Once the child process exits, it becomes a _zombie_ process, where system resources are freed, but the parent process is not yet aware of the child process's termination. To fully remove the child process, the parent process must retrieve the child process exit status by making `waitpid` system call.
 
-Let's illustrate this with a sequence diagram:
+We can visualize this process using a sequence diagram:
 
 <img src="/assets/images/2019-12-25-deadlock-in-rspec/success.svg"/>
 
-The _Parent process_ created a new child process and waits for it
-termination. The new process runs specs and writes results into the
-_Pipe_. The child process terminates and operation system (_Kernel_)
-returns an exit status to the _Parent process_ as result of the
-`waitpid` system call. Later the _Parent process_ reads from the _Pipe_
-and continues the _bisect_ operation.
+After creating a new child process, the _Parent process_ waits for the child process to terminate. During this time, the child process executes the specs and writes the results into the _Pipe_. Once the child process terminates, the operation system (_Kernel_) returns an exit status to the _Parent process_ as a result of the `waitpid` system call. After that, the _Parent process_ reads the output from the _Pipe_ and continues the _bisect_ operation.
 
 
-### Look at the bug
+### Diving into the bug
 
-RSpec hanging out can be reproduced in the [following
-way](https://github.com/benoittgt/rspec_repro_bisect_deadlock):
+To reproduce the RSpec hanging issue, you can use the code snippet available at this [link](https://github.com/benoittgt/rspec_repro_bisect_deadlock):
 
 ```ruby
 RSpec.describe "a bunch of nothing" do
@@ -99,10 +55,9 @@ RSpec.describe "a bunch of nothing" do
 end
 ```
 
-Command `--bisect` will hang out every time.
+Every time the --bisect command is run with the code snippet mentioned above, RSpec will hang out.
 
-The way RSpec runs specs in a child process and passing results back to
-a parent process looks roughtly this way:
+A rough outline of how RSpec runs specs in a child process and passes results back to a parent process is as follows:
 
 ```ruby
 @read_io, @write_io = IO.pipe
@@ -126,54 +81,28 @@ packet = @read_io.read(packet_size)
 puts "packet size: #{packet.size}"
 ```
 
-Here we create a pipe and two `IO` objects to write (`@write_io`) and to
-read (`@read_io`) the pipe. Then a new child process is created with
-calling method `fork`, that executes a passed block. The child process
-inherits all the file descriptors of the parent process, so the pipe's
-descriptors as well. The method `run_specs` is called in the child
-process and writes some bytes (1000 characters, that means 1000 bytes)
-into the pipe. The parent process after forking the child process waits
-for a child process termination (calling the method `waitpid`) and then
-reads from the pipe.
+To pass the results of the specs from the child process back to the parent process, RSpec creates a pipe and two `IO` objects - `@write_io` for writing and `@read_io` for reading the pipe. A new child process is then created by calling the `fork` method, which executes the passed block. Since the child process inherits all the file descriptors of the parent process, it also has access to the pipe's descriptors. The `run_specs` method is invoked in the child process, which writes 1000 bytes into the pipe. After forking the child process, the parent process waits for the child process to exit by calling the `waitpid` method, and then reads the data from the pipe.
 
-If run this code then data transfering works without any issue and a
-message "packet size: 1000" will be printed to the terminal.
+If the code is executed, data transfer will function without any issues, and "packet size: 1000" will be displayed on the terminal.
 
-But if increase bytes number from 1000 to 66000 (it means the child
-process will write back not 1000 bytes byt 66000) then RSpec will hang
-out.
+If the number of bytes written by the child process is increased from 1000 to 66000, RSpec will hang.
 
-The reason is pretty obvious - a pipe's buffer has a limitted size. If
-you are trying to write to a pipe more bytes than free space in a
-buffer, then a blocking writing will be blocked and waiting untill some
-data are read from a buffer and there is enough free space to write all
-the bytes. But nobody reads from the pipe. The parent process will read
-but only after the child process termination. The child process cannot
-terminate, because cannot write the rest bytes into the pipe. To
-reprodice the issue bytes number (66000) to write should be greated than
-the pipe buffer.
+The reason for this issue is pretty obvious - the buffer of the pipe has a limited size. If the child process tries to write more bytes to the pipe than the free space available in the buffer, then the writing operation will be blocked and wait until some data is read from the buffer and there is enough free space to write all the bytes. However nobody reads from the pipe. The parent process will read but only after the child process terminates. The child process cannot terminate because it cannot write the remaining bytes into the pipe. To reproduce the issue, the number of bytes to write should be greater than the buffer size of the pipe. In this case, the byte number is 66000.
 
-This situation is illustrated with the following diagram:
+The situation described above can be better understood through the following diagram:
 
 <img src="/assets/images/2019-12-25-deadlock-in-rspec/deadlock.svg"/>
 
-Both processes made blocking method calls (writing to the pipe and
-waiting for the child process termination) and are deadlocked.
+Both processes are blocked due to the use of blocking method calls - the parent process is waiting for the child process to terminate and the child process is blocked while trying to write to the pipe, resulting in a deadlock.
 
-This way, if RSpec in the child process writes to _stdout_ less than
-64KB then the issue isn't reproduced. But if more than 64KB then
-deadlock happens and RSpec hangs out.
+If the RSpec child process writes less than 64KB to a pipe, the issue does not occur. However, if it writes more than 64KB, a deadlock occurs and RSpec hangs.
 
 
 ### Pipe's buffer size
 
-A pipe buffer size is defined neither by POSIX standard nor operation
-system documentation. It's implementation details and even more - it
-isn't constant and can be changed on the fly.
+The buffer size of a pipe is not explicitly defined by either the POSIX standard or operating system documentation, and is subject to implementation details. Moreover, the buffer size is not constant and can potentially be modified in runtime.
 
-According to [experiments](https://github.com/afborchert/pipebuf) a
-pipe buffer has the following size (in bytes) in different operation
-systems:
+Various experiments, such as those documented in [this repository](https://github.com/afborchert/pipebuf), have been conducted to determine the size of pipe buffers in different operating systems:
 
 Darwin 13.4.0	|	65536
 Linux 3.16.0	|	65536
@@ -181,8 +110,7 @@ Linux 4.4.59	|	65536
 Solaris 10	|	20480
 Solaris 11.3	|	25599
 
-In the same time in macOS buffer size by default is 16KB but can be
-increased by operation system to 64KB.
+The buffer size in macOS is set to 16KB by default, but it can be increased by the operating system to 64KB.
 
 - <https://unix.stackexchange.com/questions/11946/how-big-is-the-pipe-buffer>
 - <https://github.com/afborchert/pipebuf>
@@ -196,10 +124,14 @@ are:
 - `lib/rspec/core/bisect/fork_runner.rb` ([source](https://github.com/rspec/rspec-core/blob/v3.9.0/lib/rspec/core/bisect/fork_runner.rb)) и
 - `lib/rspec/core/bisect/utilities.rb` ([source](https://github.com/rspec/rspec-core/blob/v3.9.0/lib/rspec/core/bisect/utilities.rb))
 
-Here is implemented runnings specs with _fork_ (class `ForkRunner`) and
-data exchange with a pipe (helper classs `Channel`).
+The `--bisect` command implementation has two main points of interest:
+- `lib/rspec/core/bisect/fork_runner.rb` and
+- `lib/rspec/core/bisect/utilities.rb`
 
-Specs running is implemented in the followong way:
+The `fork_runner.rb` file contains the code that creates a new child process and passes results back to the parent process, while `utilities.rb` provides some useful functions that are used throughout the bisecting process.
+
+Here is how running specs with _fork_ (using class `ForkRunner`) and
+data exchange with a pipe (using the helper class `Channel`) is implemented:
 
 ```ruby
 def dispatch_run(run_descriptor)
@@ -212,14 +144,13 @@ def dispatch_run(run_descriptor)
 end
 ```
 
-First specs are run:
+The first step - to run specs:
 
 ```ruby
 @run_dispatcher.dispatch_specs(run_descriptor)
 ```
 
-and then data is read from a pipe using `@channel`. Let's look at the
-method `dispatch_spec`:
+The method `dispatch_spec` reads data from the pipe using `@channel`:
 
 ```ruby
 def dispatch_specs(run_descriptor)
@@ -228,22 +159,14 @@ def dispatch_specs(run_descriptor)
 end
 ```
 
-Here a child process is forked and a parent process is waiting for its
-termination.
+Here the `fork` method is used to create a child process, while the parent process waits for the child process to exit before proceeding.
 
 
 ### PS
 
-The bug was fixed by removing a call `Process.waitpid(pid)`. Now a
-parent process immediately reads from a pipe avoiding deadlock.
+The bug was resolved by removing the `Process.waitpid(pid)` call, which allowed the parent process to immediately read from the pipe, thus avoiding any deadlocks.
 
-On the one hand - the issue is solve. On the other hand a new minor
-issue is introduced. Noe a child process a left in a zombi state as far
-as nobody gets its exit status with the system call `waitpid`, that
-means a process descriptors leaking. When a number of processes in
-operation system reaches a limit, not big actually (yeah, there is limit
-of how many processes could exist at the same time), it will be
-impossible to start a new process.
+Although the original deadlock issue was resolved by removing the Process.waitpid(pid) call and immediately reading from the pipe, a new minor issue was introduced. Now the child process is left in a zombie state as no one gets its exit status with the waitpid system call, resulting in process descriptor leaks. If the number of processes in the operating system reaches its limit (which is not very high), it becomes impossible to start a new process.
 
 
 ### Links
