@@ -10,33 +10,32 @@ extra_head: |
 ---
 
 
-Recently I was investigating a bug related to code in one of the `after_commit` _callback_ in a ActiveRecord model in the current project. And suddenly I've realised that have only vague knowledge and understanding of implicit database transactions. The `after_commit` callback is called at transaction completing and it's importand to understand when and how it happens. Espessially I was interested in _nested_ implicit transactions. So this sheat sheet is a result of my diving into this topic. Here you will find multiple examples of SQL queries (specific to PostreSQL). It's one of the things I am missing in guides and numerous blog posts.
+While working on my latest Rails project, I encountered a bug that was related to code in an `after_commit` callback. This made me realize that I didn't fully understand implicit database transactions. The `after_commit` callback is called after a transaction completes, so it's important to understand when and how transactions occur. I was particularly interested in _nested implicit_ transactions, so I created this cheat sheet to help me learn more about this topic. This cheat sheet includes multiple examples of SQL queries (specific to PostgreSQL), which is something that I was missing from other guides and blog posts.
 
 
 ### Implict transactions
 
-As it's well known ActiveRecord implicitly wraps all the modifying operations that trigger callbacks (`create`/`save`/`update`/`destroy`, `touch`, `toggle`) into transaction.
+When you perform a modifying operation in ActiveRecord, such as `create`, `save`, `update`, `destroy`, `touch`, or `toggle`, ActiveRecord automatically starts a transaction. This transaction is committed when the operation completes successfully, or rolled back if the operation raises an exception. This behavior ensures that any changes made to the database as a result of the operation are always atomic, meaning that either all of the changes are made, or none of them are. This is a useful feature for ensuring data integrity.
 
-Let's imagine that we run the following command:
+Let's imagine that we execute the following Ruby code:
 
 ```ruby
 Account.create(name: 'KFC')
 ```
 
-Resulting SQL query (that you can see in the console or a log file) will look like this:
+The resulting SQL query for the code above would be:
 
 ```sql
 BEGIN
-  INSERT INTO "accounts" ("name") VALUES ($1) RETURNING "id"  [["name", "KFC"]]
+  INSERT INTO "accounts" ("name") VALUES ($1) RETURNING "id" -- [["name", "KFC"]]
 COMMIT
 ```
 
-The transaction begins with command `BEGIN` and completes with command `COMMIT`. To cancel all the data changes of the transaction a command `ROLLBACK` is used ([PostgreSQL documentation](https://www.postgresql.org/docs/11/tutorial-transactions.html)).
+The transaction initiates with the `BEGIN` command and concludes with the `COMMIT` command. To undo all the data modifications made during the transaction, the `ROLLBACK` command is employed (as stated in the ([PostgreSQL documentation](https://www.postgresql.org/docs/11/tutorial-transactions.html))).
 
-If the whole graph of models is saving (main model and all the associated ones), all these queries are also wrapped into one outer transaction.
+In the scenario where the entire model graph needs to be saved, encompassing the root model and its associations, all the corresponding SQL  queries are grouped together within a single transaction.
 
-Let's imagine we create an account model and two associated payments
-models:
+Consider an example where we create an account model accompanied by two associated payments:
 
 ```ruby
 Account.create(
@@ -45,22 +44,22 @@ Account.create(
 )
 ```
 
-Resulting SQL query will look like this:
+The SQL query result will be as follows:
 
 ```sql
 BEGIN
-  INSERT INTO "accounts" ("name") VALUES ($1) RETURNING "id"  [["name", "KFC"]]
-  INSERT INTO "payments" ("amount", "account_id") VALUES ($1, $2) RETURNING "id"  [["amount", "10.0"], ["account_id", 1]]
-  INSERT INTO "payments" ("amount", "account_id") VALUES ($1, $2) RETURNING "id"  [["amount", "13.0"], ["account_id", 1]]
+  INSERT INTO "accounts" ("name") VALUES ($1) RETURNING "id" --  [["name", "KFC"]]
+  INSERT INTO "payments" ("amount", "account_id") VALUES ($1, $2) RETURNING "id" -- [["amount", "10.0"], ["account_id", 1]]
+  INSERT INTO "payments" ("amount", "account_id") VALUES ($1, $2) RETURNING "id" -- [["amount", "13.0"], ["account_id", 1]]
 COMMIT
 ```
 
-So this transaction is implicit as far as we don't explicitly enables
-it.
+So this transaction is implicit as far as we don't explicitly enable it.
+
 
 ### Explicit transactions
 
-To create an explicit transaction a method `ActiveRecord::Base.transaction` should be used, a class method `transaction` that's avaialable in every ActiveRecord model class, or `transaction` instance method. All the SQL queries in transactions are wrapped into standard `BEGIN`/`COMMIT` block.
+If you want to establish a transaction explicitly, you have multiple options at your disposal. One approach is to utilize the `ActiveRecord::Base.transactio`n method, which is a class method available in all ActiveRecord model classes. Alternatively, you can employ the `transaction` instance method. Regardless of the method chosen, all SQL queries executed within transactions are automatically enclosed within a `BEGIN`/`COMMIT` block.
 
 ```ruby
 ActiveRecord::Base.transaction do
@@ -70,13 +69,13 @@ end
 
 ```sql
 BEGIN
-  INSERT INTO "accounts" ("name") VALUES ($1) RETURNING "id"  [["name", "KFC"]]
+  INSERT INTO "accounts" ("name") VALUES ($1) RETURNING "id" -- [["name", "KFC"]]
 COMMIT
 ```
 
-Although `Account.create` call should create its own implicit transaction, inside explicitly started transaction an implicit nested transaction is "absorbed". So by default creation of a nested implicit transaction is skipped.
+While the `create` method call usually triggers an implicit transaction of its own, it behaves differently when executed within an explicitly initiated transaction. In such cases, any implicit nested transaction is assimilated and effectively skipped by default.
 
-Similarly an explicit call of `transaction` method inside another explicit transaction doesn't create a new nested transaction.
+Similarly, when the transaction method is explicitly used within another explicitly initiated transaction, it does not initiate a new nested transaction.
 
 ```ruby
 ActiveRecord::Base.transaction do
@@ -88,25 +87,26 @@ end
 
 ```sql
 BEGIN
-  INSERT INTO "accounts" ("name") VALUES ($1) RETURNING "id"  [["name", "KFC"]]
+  INSERT INTO "accounts" ("name") VALUES ($1) RETURNING "id" -- [["name", "KFC"]]
 COMMIT
 ```
 
+
 ### Nested transactions
 
-Real nested transactions are supported (according to Rails [documentation](https://api.rubyonrails.org/classes/ActiveRecord/Transactions/ClassMethods.html#module-ActiveRecord::Transactions::ClassMethods-label-Nested+transactions)) only by Microsoft SQL Server, and all the other supported in Rails RDMS imitate them wit_save points_ ([PostgreSQL documentation](https://www.postgresql.org/docs/11/sql-savepoint.html)). As follows from teh name it's just point to restore, tha allow rollback changes to some saved _save point_. Like in video games it's possible to restore the same save point multiple times in arbitrary point in a transaction.
+According to the Rails [documentation](https://api.rubyonrails.org/classes/ActiveRecord/Transactions/ClassMethods.html#module-ActiveRecord::Transactions::ClassMethods-label-Nested+transactions), true nested transactions are exclusively supported by Microsoft SQL Server. Other supported RDBMS in Rails emulate nested transactions using _savepoints_, as outlined in the [PostgreSQL documentation](https://www.postgresql.org/docs/11/sql-savepoint.html). Savepoints act as checkpoints within a transaction, allowing for the rollback of changes made up to a specific savepoint. Similar to the concept of saving progress in video games, it is possible to restore the same savepoint multiple times at any arbitrary point within a transaction.
 
-There are the following commands are available (please take into account
-that it's PostgreSQL-specific examples):
-* `SAVEPOINT` - to create a _save point_
-* `ROLLBACK TO SAVEPOINT` - to restore state at the _save point_ creation
-* `RELEASE SAVEPOINT` - to remove a _save point_
+Within PostgreSQL, you can utilize the following commands for savepoints:
 
-It's allowd to use _save points_ only inside a transaction(`BEGIN`/`COMMIT` block). Obviously it isn't full-fledged transactions, as far as amoung all the ACID properties they provide only _atomicity_ ("A"). Isolation ("I") isn't provided because if there several _save pints_ created then changes after one of them will be visible to all the subsequent _save points_. Dirability ("D") also isn't guarantied - "closing" of a "transaction" with `RELEASE SAVEPOINT` doesn't cause persisting changes on the storage device.
+* `SAVEPOINT`: this command is employed to create a savepoint, enabling you to designate a specific checkpoint within a transaction.
+* `ROLLBACK TO SAVEPOINT`: with this command, you can restore the transaction to the state it was in when the savepoint was created.
+* `RELEASE SAVEPOINT`: use this command to remove a savepoint, effectively discarding any modifications made after the savepoint was established.
 
-According to the documentation _save point_ is automatically removed if a new one is created with the same name. In PostgreSQL the previous _save point_ isn't removed and will be available again after the new one is removed.
+In PostgreSQL, savepoints can only be used within a transaction defined by the `BEGIN`/`COMMIT` block. However, it's important to understand that savepoints do not provide the complete set of features associated with transactions, including all the ACID properties. While they do ensure atomicity (the "A" in ACID) by treating changes as a single unit, they do not guarantee isolation (the "I" in ACID) - there is no way to associate SQL query with some savepoint. Additionally, durability (the "D" in ACID) is not guaranteed because a safepoint couldn't be commited on its own before the outer real transaction is commited.
 
-By default ActiveRecord doesn't create nested transaction (transaction in terms of Rails, not database). To enforce its creation an option `requires_new: true` should be used.
+According to the documentation, when a new savepoint is created with the same name, the previous savepoint is automatically replaced. Nevertheless, in PostgreSQL, the previous savepoint is not removed and remains accessible once the new savepoint is removed.
+
+In ActiveRecord nested transactions are not automatically created by default. To explicitly enforce the creation of a nested transaction, you can utilize the `requires_new: true` option.
 
 ```ruby
 ActiveRecord::Base.transaction do
@@ -120,17 +120,17 @@ end
 
 ```sql
 BEGIN
-  INSERT INTO "accounts" ("name") VALUES ($1) RETURNING "id"  [["name", "KFC"]]
+  INSERT INTO "accounts" ("name") VALUES ($1) RETURNING "id" -- [["name", "KFC"]]
 
   SAVEPOINT active_record_1
-  INSERT INTO "accounts" ("name") VALUES ($1) RETURNING "id"  [["name", "McDonald's"]]
+  INSERT INTO "accounts" ("name") VALUES ($1) RETURNING "id" -- [["name", "McDonald's"]]
   RELEASE SAVEPOINT active_record_1
 COMMIT
 ```
 
-As you can see the second _INSERT_ query is wrapped into `SAVEPOINT`/`RELEASE SAVEPOINT`. This way a nested transaction is emulated.
+As you can observe, the second _INSERT_ query is encapsulated within `SAVEPOINT`/`RELEASE SAVEPOINT` statements.
 
-There is one more useful option - `joinable: false`. It means that any nested transaction will not be absorbed by the one created with `joinable: false`.
+Additionally, there is the `joinable: false` option, which prevents any nested transaction from being assimilated into the transaction created with this option.
 
 ```ruby
 ActiveRecord::Base.transaction(joinable: false) do
@@ -142,16 +142,16 @@ end
 ```sql
 BEGIN
   SAVEPOINT active_record_1
-  INSERT INTO "accounts" ("name") VALUES ($1) RETURNING "id"  [["name", "KFC"]]
+  INSERT INTO "accounts" ("name") VALUES ($1) RETURNING "id" -- [["name", "KFC"]]
   RELEASE SAVEPOINT active_record_1
 
   SAVEPOINT active_record_1
-  INSERT INTO "accounts" ("name") VALUES ($1) RETURNING "id"  [["name", "McDonald's"]]
+  INSERT INTO "accounts" ("name") VALUES ($1) RETURNING "id" -- [["name", "McDonald's"]]
   RELEASE SAVEPOINT active_record_1
 COMMIT
 ```
 
-It works this way also for a nested call of `transaction` method - it also causes wrapping of SQL queries into `SAVEPOINT`/`RELEASE SAVEPOINT`.
+This behavior also applies to nested calls of the `transaction` method, as it also triggers the wrapping of SQL queries into `SAVEPOINT`/`RELEASE SAVEPOINT` statements.
 
 ```ruby
 ActiveRecord::Base.transaction(joinable: false) do
@@ -164,12 +164,12 @@ end
 ```sql
 BEGIN
   SAVEPOINT active_record_1
-  SELECT  "accounts".* FROM "accounts" WHERE "accounts"."name" = $1 LIMIT $2  [["name", "KFC"], ["LIMIT", 1]]
+  SELECT  "accounts".* FROM "accounts" WHERE "accounts"."name" = $1 LIMIT $2 -- [["name", "KFC"], ["LIMIT", 1]]
   RELEASE SAVEPOINT active_record_1
 COMMIT
 ```
 
-If there several levels of transactions nesting then only the top level nested transactions aren't absorbed. All the transaction on the lower leves are still absorbed.
+If there are multiple levels of transaction nesting, it is important to note that only the transactions at the highest level remain. Transactions at lower levels, however, are still absorbed by the enclosing transaction.
 
 ```ruby
 ActiveRecord::Base.transaction(joinable: false) do
@@ -184,7 +184,7 @@ end
 ```sql
 BEGIN
   SAVEPOINT active_record_1
-  SELECT  "accounts".* FROM "accounts" WHERE "accounts"."name" = $1 LIMIT $2  [["name", "KFC"], ["LIMIT", 1]]
+  SELECT  "accounts".* FROM "accounts" WHERE "accounts"."name" = $1 LIMIT $2 -- [["name", "KFC"], ["LIMIT", 1]]
   RELEASE SAVEPOINT active_record_1
 COMMIT
 ```
@@ -192,7 +192,7 @@ COMMIT
 
 ### Transactions rolling back
 
-Transaction is rolled back automatically when an exception is raised.
+If an exception is raised during the execution, the transaction is rolled back automatically.
 
 ```ruby
 ActiveRecord::Base.transaction do
@@ -203,11 +203,11 @@ end
 
 ```sql
 BEGIN
-  INSERT INTO "accounts" ("name") VALUES ($1) RETURNING "id"  [["name", "KFC"]]
+  INSERT INTO "accounts" ("name") VALUES ($1) RETURNING "id" -- [["name", "KFC"]]
 ROLLBACK
 ```
 
-If exception is raised inside a nested transaction then both outer and nested ones are rolled back.
+When an exception occurs within a nested transaction, both the outer transaction and the nested transaction are rolled back.
 
 ```ruby
 ActiveRecord::Base.transaction do
@@ -222,15 +222,15 @@ end
 
 ```sql
 BEGIN
-  INSERT INTO "accounts" ("name") VALUES ($1) RETURNING "id"  [["name", "KFC"]]
+  INSERT INTO "accounts" ("name") VALUES ($1) RETURNING "id" -- [["name", "KFC"]]
 
   SAVEPOINT active_record_1
-  INSERT INTO "accounts" ("name") VALUES ($1) RETURNING "id"  [["name", "McDonald's"]]
+  INSERT INTO "accounts" ("name") VALUES ($1) RETURNING "id" -- [["name", "McDonald's"]]
   ROLLBACK TO SAVEPOINT active_record_1
 ROLLBACK
 ```
 
-There is a special exception `ActiveRecord::Rollback`, that is handled in special way. Usual exception will cause a transaction rolling back and will be re-raised again. `ActiveRecord::Rollback` causes only a transaction rolling back and doesn't cause re-raising. This way it's possible to roll back one nested transaction but dont't affect the outer one.
+It's worth noting the special handling of the `ActiveRecord::Rollback` exception. While a standard exception results in a transaction rollback and subsequent re-raising, the `ActiveRecord::Rollback` exception solely triggers a transaction rollback without re-raising. This unique behavior allows for selectively rolling back a specific nested transaction without influencing the outer transaction.
 
 ```ruby
 ActiveRecord::Base.transaction do
@@ -245,15 +245,15 @@ end
 
 ```sql
 BEGIN
-  INSERT INTO "accounts" ("name") VALUES ($1) RETURNING "id"  [["name", "KFC"]]
+  INSERT INTO "accounts" ("name") VALUES ($1) RETURNING "id" -- [["name", "KFC"]]
 
   SAVEPOINT active_record_1
-  INSERT INTO "accounts" ("name") VALUES ($1) RETURNING "id"  [["name", "McDonald's"]]
+  INSERT INTO "accounts" ("name") VALUES ($1) RETURNING "id" -- [["name", "McDonald's"]]
   ROLLBACK TO SAVEPOINT active_record_1
 COMMIT
 ```
 
-There is a tiny nuance. We have seen that if a nested transaction is run without `requires_new: true` option, then it's absorbed and joined to an outer transaction, so in fact there is no any nested transaction. Consequantly it isn't possible to rollback or commit it. But the `ActiveRecord::Rollback` exception with be rescued nevetheless on the level of this absorbed ephimeral not existing nested transaction, and this way changes will not be rolled back.
+It is worth noting a subtle nuance. If a nested transaction is executed without the `requires_new: true` option, it becomes absorbed and integrated into the outer transaction. As a result, it's impossible to explicitly rollback or commit this absorbed transaction. An `ActiveRecord::Rollback` exception raised within a nested transaction will still be rescued within this absorbed, ephemeral, non-existent nested transaction, allowing changes to persist instead of being rolled back.
 
 ```ruby
 ActiveRecord::Base.transaction do
@@ -268,16 +268,16 @@ end
 
 ```sql
 BEGIN
-  INSERT INTO "accounts" ("name") VALUES ($1) RETURNING "id"  [["name", "KFC"]]
-  INSERT INTO "accounts" ("name") VALUES ($1) RETURNING "id"  [["name", "McDonald's"]]
+  INSERT INTO "accounts" ("name") VALUES ($1) RETURNING "id" -- [["name", "KFC"]]
+  INSERT INTO "accounts" ("name") VALUES ($1) RETURNING "id" -- [["name", "McDonald's"]]
 COMMIT
 ```
 
 ### PS
 
-All the examples above were checked with both Rails 4.2 and the current Rails 5.2, so we can cosider it as a stable behaviour.
+The behavior described in the examples has been validated using both Rails 4.2 and the current Rails 5.2. Hence, we can conclude that this behavior is stable and remains consistent across these versions.
 
-There was not concidered pessimistic locking that is toughly coupled to transactions ([PostgreSQL documentation](https://www.postgresql.org/docs/current/sql-select.html#SQL-FOR-UPDATE-SHARE)). As a quick note - it's implemeted in Rails with the following methods:
+There was not concidered pessimistic locking in the post that is toughly coupled to transactions ([PostgreSQL documentation](https://www.postgresql.org/docs/current/sql-select.html#SQL-FOR-UPDATE-SHARE)). As a quick note - it's implemeted in Rails with the following methods:
 * `ActiveRecord::Base#lock!`,
 * `ActiveRecord::Base#with_lock`
 * and `ActiveRecord::QueryMethods#lock`
