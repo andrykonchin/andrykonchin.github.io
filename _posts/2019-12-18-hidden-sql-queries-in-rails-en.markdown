@@ -1,6 +1,6 @@
 ---
 layout:     post
-title:      "Hidden SQL-queries in Rails"
+title:      "Hidden SQL queries in Rails"
 date:       2019-12-18 00:43
 categories: Rails
 extra_head: |
@@ -9,19 +9,25 @@ extra_head: |
   </style>
 ---
 
-Let's imagine what happens when we launch Rails console and make the
-first SQL query to a database:
+Imagine the sequence of events when we run Rails console and
+execute our first SQL query against the PostgreSQL database:
 
+```ruby
+Account.last
+#  Account Load (1.9ms)  SELECT  "accounts".* FROM "accounts" ORDER BY "accounts"."id" DESC LIMIT $1  [["LIMIT", 1]]
 ```
-irb(main):001:0> Account.last
-  Account Load (1.9ms)  SELECT  "accounts".* FROM "accounts" ORDER BY "accounts"."id" DESC LIMIT $1  [["LIMIT", 1]]
-```
 
-Rails builds an SQL-query, logs it and send to database to execute. Such SQL queries are flooding console output and development log files. But it's only visible interaction between Rails and a database. Let's look at invisible SQL queries that Rails executes under the hood.
+Rails constructs an SQL query, logs and sends it to the database for
+execution. These SQL queries flood the console output and development
+log files, representing the visible interaction between Rails and the
+database. However, there are also concealed SQL queries that Rails
+executes behind the scenes.
 
-### Establishing a new connection
+### Establishing a New Connection
 
-Let's consider Rails 5.2 and PostgreSQL 12. If you launch Rails console and enter `Account.last`, then Rails executes a whole bunch of strange SQL-queries (other than fetching the most recent account):
+Consider the environment of Rails 5.2 in conjunction with PostgreSQL 12.
+If you run Rails console and execute `Account.last` expression, Rails
+unexpectedly executes multiple SQL queries:
 
 ```sql
 SET client_min_messages TO 'warning'
@@ -70,13 +76,16 @@ SELECT  "accounts".* FROM "accounts" ORDER BY "accounts"."id" DESC LIMIT $1
 SHOW max_identifier_length
 ```
 
-Let's figure out what is happening here.
+Let's determine what is happening.
 
-Rails establishes connection to a database lazily - only when it's nessecary - at the first SQL query to a database. That's why before `Account.last` is executed Rails hasn't establish any connection.
+Rails establishes a connection to the database lazily, meaning it only
+does so when necessary, for instance when the first SQL query to the
+database is made. Hence, prior to executing `Account.last`, Rails has
+not established any connection to database.
 
-During the `last` method call Rails establishes and sets up the first connection to a database. To generate _accessors_ for a mode attributes and _type cast_ attribute values to a table column types Rails needs to know a table schema. These data is lazily loaded from a database at the first SQL query execution and are cached.
+When the `last` method is invoked, Rails not only establishes but also sets up and configure a  connection to the database. In order to generate _accessors_ for model attributes and correctly type-cast attribute values based on table column types, Rails requires knowledge of the table schema. This information is lazily loaded from the database during the first execution of an SQL query and subsequently cached.
 
-Lets's review each of the SQL query above in details.
+Let's now examine each of the SQL queries mentioned above in detail.
 
 
 ### #1
@@ -85,17 +94,20 @@ Lets's review each of the SQL query above in details.
 SET client_min_messages TO 'warning'
 ```
 
-Rails sets up `client_min_messages` option - level of client logging
-(`warning` in our case). Postgres server writes system and user messages
-into a log according to a logging level. For instance resulting parse
-tree, the query rewriter output, or the execution plan for each executed
-query. To send or not to send these messages to a client depends on
-connection specific client logging level, that is by default `notice`.
+Rails configures the `client_min_messages` option, which determines the
+level of client logging (set to `warning` in our case). The PostgreSQL
+server logs both system and user messages based on the specified logging
+level. These messages can include the resulting parse tree, the query
+rewriter output, or the execution plan for each executed SQL query. The
+decision to persist these messages is contingent upon the
+connection-specific client logging level, which, by default, is set to
+`notice`.
 
-Just for fun you can play with Postgres debug output - set the most
-detailed logging level(`DEBUG1`) and enable logging, for instance,
-execution plans and internal representation of SQL queries before and
-after optimisation:
+For some experimentation, you can have fun by tinkering with the
+Postgres debug output. Set the logging level to the most detailed option
+(`DEBUG1`) and enable logging. This allows you to observe various
+details, such as execution plans and the internal representation of SQL
+queries both before and after optimization:
 
 ```sql
 SET debug_print_plan      TO true;
@@ -107,8 +119,9 @@ SET client_min_messages   TO 'DEBUG1';
 SELECT * FROM accounts;               -- or any other SQL query
 ```
 
-Debug output in PostgreSQL is a big topic on its own and deserves a
-separate post. Just mention a few links:
+The realm of debug output in PostgreSQL is an expansive subject that
+merits an entire post dedicated to its intricacies. Nonetheless, here
+are a few notable links worth mentioning for deeper insights:
 
 - <https://www.postgresql.org/docs/12/runtime-config-client.html#GUC-CLIENT-MIN-MESSAGES>
 - <https://www.postgresql.org/docs/12/runtime-config-logging.html#RUNTIME-CONFIG-SEVERITY-LEVELS>
@@ -120,11 +133,11 @@ separate post. Just mention a few links:
 SET standard_conforming_strings = on
 ```
 
-The `standard_conforming_strings` option changes the way string literals
-in SQL queries are interpreted. Particularly on intepretation of
-*backslash*-sequences (`\n`, `\t`, ...). When it's on then
-interpretation is disabled. Starting from PostgreSQL 9.1 this options is
-on by default.
+The `standard_conforming_strings` option alters the interpretation of
+string literals within SQL queries, specifically affecting the handling
+of backslash sequences (`\n`, `\t`, and so on). When this option is
+enabled, the interpretation of these sequences is disabled. Starting
+from PostgreSQL 9.1, this option is enabled by default.
 
 Links:
 - <https://www.postgresql.org/docs/12/runtime-config-compatible.html#GUC-STANDARD-CONFORMING-STRINGS>
@@ -137,22 +150,21 @@ Links:
 SET SESSION timezone TO 'UTC'
 ```
 
-This command, it's obvious, sets _timezone_ for a connection. This
-connection timezone is used in the following cases:
-- when data is transmited to a database client time values with timezone
-are converted to this connection timezone
-- when data is transmited to a database server time literals without
-explicit timezone are assigned this connection timezone
+This command explicitly sets the timezone for a connection. The
+connection's timezone is utilized in the following scenarios:
+- when transmitting data from a database server, time values with a timezone are converted to match the connection's timezone.
+- when transmitting data to a database server, time literals without an explicit timezone are assigned the connection's timezone.
 
-If timezone isn't set explicitly then the following rules are used:
-- if on a client side an environment variable `PGTZ` is set - then a
-client library `libpq` will use it and set connection timezone on its
-own
-- otherwise PostgreSQL on a server side will check whether timezone is
-configured on a `postgresql.conf` file
-- in case it isn't configured then a server local timezone is applied:
-  - PostgreSQL check if an environment variable `TZ` presents
-  - and only then uses system local timezone
+If the timezone is not explicitly set, the following rules come into play:
+- on the client side, if the environment variable `PGTZ` is set, the
+*libpq* client library will utilize it to establish the connection
+timezone automatically
+- if `PGTZ` isn't set, PostgreSQL on the server side will check if the
+timezone is configured in the `postgresql.conf` file
+- if the timezone isn't configured, the server will resort to the
+server's local timezone:
+  - the `TZ` environment variable is checked
+  - and only then the system's local timezone is used.
 
 Links:
 - <https://www.postgresql.org/docs/12/runtime-config-client.html#GUC-TIMEZONE>
@@ -167,7 +179,7 @@ FROM pg_type as t
 WHERE t.typname IN ('int2', 'int4', 'int8', 'oid', 'float4', 'float8', 'bool')
 ```
 
-This way Rails obtains information about some essential types in PostgreSQL. The system table `pg_type` contains properties of builtin and custom user types. Rails fetches a type name and a primary key `oid`:
+In this manner, Rails acquires information about certain basic types within PostgreSQL. The `pg_type` system table houses attributes of both built-in and custom user types. Rails retrieves the type name and the primary key *oid* from this table:
 
 ```
  oid | typname
@@ -198,9 +210,10 @@ WHERE
   OR t.typelem != 0
 ```
 
-This way Rails obtains properties of built in Postgres types (`t.typname IN
-('int2', 'float4', 'text', 'varchar'...)`) and user
-custom types as well - _ranges_, _enums_, _domains_ (`t.typtype IN ('r', 'e', 'd')`) and arrays (`t.typelem != 0`).
+In this manner, Rails acquires the attributes of built-in PostgreSQL
+types (`t.typname IN ('int2', 'float4', 'text', 'varchar', ...)`) as
+well as user-defined custom types such as *ranges*, *enums*, *domains*
+(`t.typtype IN ('r', 'e', 'd')`), and *arrays* (`t.typelem != 0`).
 
 ```
   oid  |        typname        | typelem | typdelim |    typinput    | rngsubtype | typtype | typbasetype
@@ -343,11 +356,12 @@ custom types as well - _ranges_, _enums_, _domains_ (`t.typtype IN ('r', 'e', 'd
 SELECT c.relname FROM pg_class c LEFT JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = ANY (current_schemas(false)) AND c.relkind IN ('r','v','m','p','f')
 ```
 
-Rails fetches lists of tables, _views_, _materialized views_,
-_partitioned tables_ and _foreign tables_ (`relkind IN ('r','v','m','p','f')`).
-In the example below a response contains Rails system tables (`schema_migrations` и
-`ar_internal_metadata`) and two application specific tables - `accounts` and
-`payments`:
+Rails retrieves comprehensive list of tables, *views*, *materialized
+views*, *partitioned tables*, and *foreign tables* (`relkind IN ('r',
+'v', 'm', 'p', 'f')`). Illustratively, in the provided example, the
+response comprises not only Rails system tables (`schema_migrations` and
+`ar_internal_metadata`) but also two tables specific to the application:
+`accounts` and `payments`:
 
 ```
        relname
@@ -379,7 +393,7 @@ SELECT a.attname
  ORDER BY i.idx
 ```
 
-Rails obtains a primary key name of the `accounts` table, that contains all the accounts and needed to execute the original user request `Account.last`:
+In this manner, Rails retrieves the primary key name of the `accounts` table.
 
 ```
  attname
@@ -398,10 +412,19 @@ Rails obtains a primary key name of the `accounts` table, that contains all the 
 SHOW search_path
 ```
 
-PostgreSQL provides conception of a database schema. A database contains multiple schemas and each schema contains tables and other names entities. Basicaly it's a namespace.
-The full indentifier of a table consists of database name, a schema and a table, e.g. `my_database.my_schema.my_table`. If in a SQL query a table name is used without schema name then the table is being searched in schemas listed in a `search_path` list.
+PostgreSQL introduces the concept of a database schema, where a database
+can consist of multiple schemas, each containing tables and other named
+entities. Essentially, a schema acts as a namespace. The complete
+identifier of a table comprises the database name, schema name, and
+table name, such as `my_database.my_schema.my_table`. When a table name
+is used in a SQL query without specifying the schema, PostgreSQL
+searches for the table within the schemas listed in the `search_path`
+option.
 
-The option `search_path` by default has the following value `"$user", public`, where `"$user"` means a name of a a current user and is ignored in case such schema doesn't exist. So usually the `public` is used.
+By default, the `search_path` option is set to `"$user", public`, where
+`"$user"` represents the name of the current user and is ignored if such
+a schema doesn't exist. Therefore, the `public` schema is typically
+utilized.
 
 ```
    search_path
@@ -428,8 +451,9 @@ SELECT a.attname, format_type(a.atttypid, a.atttypmod),
  ORDER BY a.attnum
 ```
 
-This way Rails obtains the table `accounts` structure - column names (`id`,
-`name`), types, `NOT NULL` constraints, etc:
+In this manner, Rails acquires the structure of the accounts table,
+including the column names (`id`, `name`), data types, *NOT NULL*
+constraints, and more:
 
 ```
  attname |    format_type    |             pg_get_expr              | attnotnull | atttypid | atttypmod | collname | comment
@@ -439,8 +463,8 @@ This way Rails obtains the table `accounts` structure - column names (`id`,
 (2 rows)
 ```
 
-The column `atttypid` contains type identifiers, that were fetched on the
-step #5:
+The `atttypid` column stores the type identifiers that were retrieved
+during step #5:
 
 ```
   oid  |        typname        | typelem | typdelim |    typinput    | rngsubtype | typtype | typbasetype
@@ -449,14 +473,19 @@ step #5:
   1043 | varchar               |       0 | ,        | varcharin      |            | b       |           0
 ```
 
-The column `atttypmod` contains type-specific attributes, that were specified for a column at a table creation, e.g. length of _varchar_. Value -1 means, that there are no an attributes.
+The `atttypmod` column stores type-specific attributes that were
+specified for a column during table creation, such as the length of a
+*varchar* column. A value of -1 indicates the absence of attributes.
 
-The condition `a.attnum > 0` means that hidden system columns are filtered out and only columns specified explicitly by a user during a table creation or structure modification are fetched. For system columns, e.g. `oid`, `attrnum` is negative.
+The condition `a.attnum > 0` filters out hidden system columns, ensuring
+that only columns explicitly specified by a user during table creation
+or structure modification are retrieved. System columns, such as `oid`,
+have negative attnum values.
 
-There is another condition - `NOT a.attisdropped`. The column
-`attisdropped` contains a flag that means a column is deleted. Dispite a
-column is deleted phisically column values are still stored in a table but are
-ignored during SQL queries execution.
+Another condition, `NOT a.attisdropped`, is applied. The `attisdropped`
+column contains a flag that indicates whether a column has been deleted.
+Despite the deletion of a column, its values are still physically stored
+in the table but are ignored during the execution of SQL queries.
 
 - <https://www.postgresql.org/docs/12/catalog-pg-attribute.html>
 - <https://www.postgresql.org/docs/12/catalog-pg-attrdef.html>
@@ -470,8 +499,9 @@ ignored during SQL queries execution.
 SHOW max_identifier_length
 ```
 
-The `max_identifier_length` option is read-only and contains the maximum
-length of table and column names. It's initialized on the Postgres compilation step and by default is 63 bytes.
+The `max_identifier_length` option is a read-only setting that specifies
+the maximum length allowed for table and column names. It is set during
+the compilation of PostgreSQL and has a default value of 63 bytes.
 
 ```
  max_identifier_length
@@ -483,21 +513,23 @@ length of table and column names. It's initialized on the Postgres compilation s
 <https://www.postgresql.org/docs/10/runtime-config-preset.html#GUC-MAX-IDENTIFIER-LENGTH>
 
 
-### Table specific SQL queries
+### Table Specific SQL Queries
 
-As we have seen, some queries are generic and related to connection
-setup and a database settings. All the other queries are related to the
-`accounts` table, which is used to execute the original user request.
+As observed, there are generic queries associated with connection setup
+and database settings. Additionally, there are queries specifically
+related to the `accounts` table, which is utilized to fulfill the original
+user request.
 
-If to execute similar Ruby expression that involves another table (`payments`),
+If we were to execute a similar Ruby expression involving another table,
+such as `payments`,
 
 ```
 Payment.last
 SELECT  "payments".* FROM "payments" ORDER BY "payments"."id" DESC LIMIT $1
 ```
 
-then we will see only `payments` table specific queries - fetching a
-primary key name and the table structure:
+then we would observe queries specific to the `payments` table, such as
+fetching the primary key name and the table structure:
 
 ```sql
 SELECT a.attname
@@ -526,24 +558,28 @@ SELECT a.attname, format_type(a.atttypid, a.atttypmod),
  ORDER BY a.attnum
 ```
 
-If we execute the Ruby expression one more time then only the query to fetch rows from the table will be executed.
+Upon executing the Ruby expression once more, only the query to retrieve
+rows from the table will be executed.
 
 
-### How to make the hidden queries visible
+### Making Hidden Queries Visible
 
-One of the simplest ways to see system SQL queries made by Rails, but
-not the most transparent, it's a built in Rails mechanism of
-notifications.
+One straightforward approach to view the system SQL queries performed by
+Rails, albeit not the most transparent one, is through the use of Rails'
+built-in notification mechanism.
 
-Rails publishes events for all the meaningful operations:
+Rails emits events for various significant operations, including:
 - calling a controller *action*,
 - rendering of a view or a *partial*
 - executing SQL queries
 - ...
 
-So for every system or user-initiated SQL query a corresponding event will be published.
+Hence, a corresponding event will be published for every SQL query
+initiated by Rails or the user.
 
-To see hidden SQL queris you need just to launch Rails console and subscribe on `sql.active_record` events in the following way:
+To make hidden SQL queries visible, all you need to do is to run Rails
+console and subscribe to `sql.active_record` events using the following
+approach:
 
 ```ruby
 ActiveSupport::Notifications.subscribe "sql.active_record" do |name, started, finished, unique_id, data|
@@ -551,7 +587,7 @@ ActiveSupport::Notifications.subscribe "sql.active_record" do |name, started, fi
 end
 ```
 
-And then every SQL query will be printed into console.
+As a result, each SQL query will be displayed in the console.
 
 - <https://guides.rubyonrails.org/active_support_instrumentation.html>
 - <https://api.rubyonrails.org/classes/ActiveSupport/Notifications.html>
