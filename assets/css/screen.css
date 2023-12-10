@@ -465,7 +465,7 @@ margin on the iframe, cause it breaks stuff. */
 
 
 /* ==========================================================================
-   4. General - The main styles for the the theme
+   4. General - The main styles for the theme
    ========================================================================== */
 
 /* Big cover image on the home page */
@@ -746,6 +746,10 @@ margin on the iframe, cause it breaks stuff. */
 
 body:not(.post-template) .post-title {
     font-size: 3.6rem;
+}
+
+.post table {
+    word-break: normal; /* it was `break-word` but it caused issues in tabled with narrow columns */
 }
 
 .post-title a {
