@@ -8,4 +8,9 @@ gem "jekyll"
 gem "rouge"
 gem "jekyll-paginate"
 
+gem "logger"
+gem "csv"
+gem "base64"
+gem "bigdecimal"
+
 gem "webrick", "~> 1.7"
