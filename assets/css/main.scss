@@ -3,11 +3,6 @@
 # Change this file for any custom CSS.
 ---
 
-/* We need to add display:inline in order to align the '>>' of the 'read more' link */
-.post-excerpt p {
-	display:inline;
-}
-
 // Import partials from `sass_dir` (defaults to `_sass`)
 @import
 	"syntax"
@@ -16,9 +11,11 @@
 /* ==========================================================================
    Custom Typography & Readability Design Decisions
    ==========================================================================
-   1. Base Typography:
-      - Body font-size set to 1.7rem (17px) with line-height: 1.6 to balance
+   1. Base Typography & Body Sizing:
+      - Body font-size set to explicit 1.7rem (17px) with line-height: 1.6 to balance
         Merriweather's tall x-height and heavy stroke for comfortable long-form reading.
+      - Explicit 1.7rem on .post and .post-content overrides legacy relative 0.95em
+        multipliers in screen.css media queries, ensuring consistent sizing across screens.
    2. Paragraph Alignment:
       - Left-aligned ('text-align: left') to prevent "rivers of whitespace"
         and erratic word spacing that occurred with 'justify' around inline code.
@@ -37,6 +34,11 @@
         so monospace characters match the visual weight and legibility of body text.
       - Inline code given 0.9em font-size, subtle background, and padding to blend
         naturally into serif prose without breaking line flow.
+   6. Index Page Hierarchy & Teasers:
+      - Post titles on index scaled to 3.5rem (line-height: 1.25) to step down from single post h1.
+      - Excerpt text explicitly set to 1.58rem (15.8px) with line-height: 1.65 and soft dark color
+        (#3d4449) for a crisp, legible teaser that remains distinct from full post prose.
+      - Post metadata scaled to 1.4rem to sit harmoniously below excerpts.
    ========================================================================== */
 
 /* Base typography */
@@ -47,7 +49,12 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-/* Post Title */
+/* Post Container - Prevent legacy 0.95em cascading downscale */
+.post {
+  font-size: 1.7rem;
+}
+
+/* Single Post Title */
 .post-template .post-title {
   font-size: 4.2rem;
   line-height: 1.2;
@@ -55,9 +62,44 @@ body {
   margin-bottom: 1.0rem;
 }
 
+/* Index Page Typography & Hierarchy */
+body:not(.post-template) {
+  .post-title {
+    font-size: 3.5rem;
+    line-height: 1.25;
+    letter-spacing: -0.4px;
+    margin-bottom: 0.8rem;
+  }
+}
+
+.post-excerpt {
+  p {
+    display: inline;
+    font-size: 1.58rem;
+    line-height: 1.65;
+    color: #3d4449;
+  }
+
+  .read-more {
+    white-space: nowrap;
+    text-decoration: none;
+    font-weight: 600;
+  }
+}
+
+.post-meta {
+  font-size: 1.4rem;
+  color: #768390;
+  margin: 1.4rem 0;
+}
+
 /* Post Content & Readability */
 .post-content {
+  font-size: 1.7rem;
+  line-height: 1.6;
+
   p {
+    font-size: 1.7rem;
     text-align: left;
     margin: 0 0 1.6rem 0;
   }
