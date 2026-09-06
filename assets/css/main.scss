@@ -54,12 +54,34 @@ body {
   font-size: 1.7rem;
 }
 
-/* Single Post Title */
-.post-template .post-title {
-  font-size: 4.2rem;
-  line-height: 1.2;
-  letter-spacing: -0.6px;
-  margin-bottom: 1.0rem;
+/* Single Post Header & Metadata */
+.post-template {
+  .post-header {
+    margin-bottom: 3.0rem;
+  }
+
+  .post-title {
+    font-size: 4.2rem;
+    line-height: 1.2;
+    letter-spacing: -0.6px;
+    margin-bottom: 1.2rem;
+  }
+
+  .post-meta {
+    font-family: "Open Sans", sans-serif;
+    font-size: 1.5rem;
+    font-weight: 400;
+    line-height: 1.5;
+    color: #8c959f;
+    margin: 0;
+
+    .post-date {
+      text-transform: none;
+      font-size: inherit;
+      font-weight: inherit;
+      color: inherit;
+    }
+  }
 }
 
 /* Index Page Typography & Hierarchy */
@@ -88,9 +110,26 @@ body:not(.post-template) {
 }
 
 .post-meta {
+  font-family: "Open Sans", sans-serif;
   font-size: 1.4rem;
-  color: #768390;
+  color: #8c959f;
   margin: 1.4rem 0;
+
+  .post-date {
+    text-transform: none;
+    font-size: inherit;
+    color: inherit;
+  }
+
+  a {
+    color: #8c959f;
+    text-decoration: none;
+
+    &:hover {
+      color: #57606a;
+      text-decoration: underline;
+    }
+  }
 }
 
 /* Post Content & Readability */
@@ -184,12 +223,15 @@ body:not(.post-template) {
 
   /* Blockquote styling */
   blockquote {
-    margin: 2.2rem 0;
-    padding: 0.4rem 0 0.4rem 1.6rem;
-    border-left: 3px solid #0366d6;
-    color: #586069;
+    margin: 2.4rem 0;
+    padding: 0.8rem 0 0.8rem 1.8rem;
+    border-left: 4.5px solid #4a4a4a;
+    color: #2f3437;
+    font-style: italic;
+
     p {
       margin: 0;
+      font-style: italic;
     }
   }
 }
