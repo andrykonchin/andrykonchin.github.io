@@ -5,45 +5,39 @@ date:   2026-08-14 20:57
 categories: Ruby
 ---
 
-Recently, I worked on implementing `File#birthtime` support in TruffleRuby ([PR #4324](https://github.com/truffleruby/truffleruby/pull/4324)). To ensure compatibility with MRI (CRuby) across different operating systems, I had to dig into CRuby's source code and the underlying OS system calls. It turned out to be a fascinating dive into POSIX limitations, modern Linux syscalls, and runtime platform detection.
-
-Retrieving file metadata in Ruby is usually straightforward. The `File` class provides numerous convenient methods like `executable?`, `size`, and others. These attributes are also exposed through the `File::Stat` class ([documentation](https://rubyapi.org/4.0/o/file/stat)), which is returned by `File#stat`.
-
-Under the hood, these methods map to POSIX system calls such as `stat(2)`, `fstat(2)`, and `lstat(2)`, which return a `stat(3type)` structure containing information about the file.
-
-However, getting the **file creation time** (or "birth time") has historically been a platform-dependent headache.
+Recently, while working on `File#birthtime` [support](https://github.com/truffleruby/truffleruby/pull/4324) in TruffleRuby, I investigated how CRuby handles file creation time across different operating systems. While Ruby's `File` and `File::Stat` expose standard attributes like size and timestamps through POSIX system calls like `stat(2)`, retrieving a file's creation time (its "birth time") has historically been a cross-platform challenge. This post explores how CRuby bridges POSIX limitations, modern Linux syscalls, and runtime filesystem capabilities.
 
 
-### The POSIX Limitation: macOS / \*BSD vs. Linux
+## The POSIX Limitation: macOS / *BSD vs. Linux
 
-The reason `birthtime` is so intriguing is that standard POSIX `stat(2)` system calls **do not support file creation time**. The standard structure returns access time (`atime`), modification time (`mtime`), and change time (`ctime`), but completely omits creation time.
+Standard POSIX `stat(2)` defines access time (`atime`), modification time (`mtime`), and status change time (`ctime`), but completely omits file creation time. Developers often confuse `ctime` with creation time, but `ctime` actually tracks inode metadata updates, such as permission changes or file renames.
 
-To work around this:
-* **macOS and \*BSD** extended the POSIX standard by adding extra fields (like `st_birthtime`) directly to their implementation of the `stat` structure. Thus, Ruby has long supported `File#birthtime` on macOS and \*BSD systems.
-* **Linux**, on the other hand, stuck strictly to the POSIX structure for `stat(2)`. As a result, prior to Ruby 4.0, calling `File#birthtime` on Linux would raise a `NotImplementedError`:
+To bridge this limitation, macOS and *BSD added non-standard extensions like `st_birthtimespec` directly to their `struct stat` definition. Because BSD systems control both the kernel and C library in a unified codebase, they could utilize reserved padding fields in `struct stat` and symbol versioning to expose birth time through standard `stat(2)` calls from early on.
+
+Linux, however, maintains a strict separation between the kernel ABI and user-space C libraries like GNU libc. The Linux 64-bit `stat(2)` system call layout had no spare fields, and writing extra timestamp data would cause stack memory corruption in existing compiled binaries. Rather than adding another one-off `stat` syscall variant, Linux kernel developers designed `statx(2)`: a modern, extensible system call capable of querying optional attributes like birth time on demand.
+
+
+## Enter `statx`: The Gradual Evolution in CRuby
+
+Introduced in Linux kernel 4.11 and glibc 2.28, `statx(2)` was adopted by CRuby in two stages.
+
+In Ruby 2.7, direct path methods like `File.birthtime(path)` and `File#birthtime` started calling `statx(2)` on Linux. However, `File.stat(path)` continued using standard `stat(2)` under the hood, creating a subtle inconsistency across Ruby 2.7 to 3.4:
 
 ```ruby
+# Ruby 2.7 - 3.4 on Linux
 File.birthtime("example.txt")
-# => NotImplementedError: birthtime is not supported on this platform
+# => 2026-08-14 10:00:00 +0000
+
+File.stat("example.txt").birthtime
+# => NotImplementedError: birthtime() function is unimplemented on this machine
 ```
 
-
-### Enter `statx` in Ruby 4.0
-
-To resolve this on Linux, Ruby 4.0 introduced support for `File#birthtime` via a relatively new Linux-specific system call: `statx(2)` (implemented in [Feature #21205](https://bugs.ruby-lang.org/issues/21205) / [commit 18a036a6](https://github.com/ruby/ruby/commit/18a036a6133bd141dfc25cd48ced9a2b78826af6)).
-
-Unlike `stat`, `statx` is a modern, non-POSIX system call introduced in Linux kernel 4.11 (and glibc 2.28) that supports retrieving extended file attributes, including the file birth time (`STATX_BTIME`).
-
-`statx(2)` is also designed with performance in mind: retrieving certain file attributes can require additional time and disk I/O, so `statx` allows the caller to pass a `mask` parameter specifying only the fields that are actually needed. This ensures the caller doesn't have to pay for attributes they don't care about.
-
-With Ruby 4.0, if your Linux kernel, glibc, and the underlying filesystem (such as ext4, Btrfs, or XFS) support `statx`, `File#birthtime` will now work seamlessly.
+In Ruby 4.0, [Feature #21205](https://bugs.ruby-lang.org/issues/21205) (committed in [18a036a6](https://github.com/ruby/ruby/commit/18a036a6133bd141dfc25cd48ced9a2b78826af6)) resolved this disparity by updating `File::Stat` on Linux to also use `statx(2)`. Because `statx(2)` accepts a request mask specifying only required attributes, `File::Stat` can query birth time on supported filesystems (such as ext4, Btrfs, or XFS) without incurring unnecessary I/O overhead.
 
 
-### C Source Dive: Conditional Compilation in `file.c`
+## C Source Dive: Conditional Compilation in `file.c`
 
-Looking into CRuby's source code ([`file.c`](https://github.com/ruby/ruby/blob/v4.0.6/file.c)), we can see how the birthtime methods are conditionally compiled depending on compile-time macros.
-
-Ruby first defines `HAVE_STAT_BIRTHTIME` if any of the target platform APIs are available:
+Looking into CRuby's source code ([`file.c`](https://github.com/ruby/ruby/blob/18a036a6133bd141dfc25cd48ced9a2b78826af6/file.c)), we can see how the birthtime methods are conditionally compiled depending on compile-time macros:
 
 ```c
 #define HAVE_STAT_BIRTHTIME
@@ -63,28 +57,19 @@ static VALUE statx_birthtime(const rb_io_stat_data *st);
 #endif
 ```
 
-If the compilation target platform doesn't support any birthtime mechanism, `HAVE_STAT_BIRTHTIME` is undefined. The corresponding methods (such as `rb_stat_birthtime`) are then mapped to `rb_f_notimplement`, which raises the standard compile-time `NotImplementedError` when called from Ruby:
+This preprocessor block configures `statx_birthtime` across each target platform:
 
-```c
-#if defined(HAVE_STAT_BIRTHTIME)
-static VALUE
-rb_stat_birthtime(VALUE self)
-{
-    return statx_birthtime(get_stat(self));
-}
-#else
-# define rb_stat_birthtime rb_f_notimplement
-#endif
-```
+- On macOS and *BSD (`HAVE_STRUCT_STAT_ST_BIRTHTIMESPEC`), it reads `st_birthtimespec` directly with nanosecond precision.
+- On Linux (`HAVE_STRUCT_STATX_STX_BTIME`), it delegates to a runtime `statx(2)` helper.
+- On Windows (`_WIN32`), it aliases `statx_birthtime` to `stat_ctime` (where Windows CRT `st_ctime` holds creation time).
+- On unsupported platforms (`#else`), `HAVE_STAT_BIRTHTIME` is left undefined, causing `rb_stat_birthtime` to fall back to `rb_f_notimplement` (raising `NotImplementedError: unimplemented on this machine`).
 
 
-### Compile-Time vs. Run-Time Limitations
+## Compile-Time vs. Run-Time Limitations
 
-One of the most interesting aspects of the Linux `statx(2)` implementation is that even if the kernel and glibc support `statx` at compile time, non-basic attributes like birthtime may not be supported by every filesystem (such as older ext2/ext3 or certain file system drivers).
+Even when the Linux kernel and glibc support `statx(2)` at compile time, non-basic attributes like birth time depend on the underlying filesystem (older ext2/ext3 or certain virtual mounts do not store it).
 
-Because support for non-basic attributes varies across filesystems on Linux, callers cannot assume that requested fields are always available. Instead, the `statx(2)` system call returns a bitmask (`stx_mask`) indicating which file attributes were actually supported and populated by the filesystem. The caller side must always check this mask before using the data.
-
-Ruby explicitly passes `STATX_BTIME` in the request mask and inspects `stx_mask` in the response. If the `STATX_BTIME` bit is not set, Ruby raises a custom filesystem-specific error instead of the generic machine-wide `NotImplementedError`:
+To handle this, `statx(2)` returns a bitmask (`stx_mask`) indicating which fields the filesystem actually populated. Ruby explicitly requests `STATX_BTIME` and checks `stx_mask` in the response. If the bit is missing, Ruby raises a filesystem-specific error instead of the generic machine-wide `NotImplementedError`:
 
 ```c
 # define statx_has_birthtime(st) ((st)->stx_mask & STATX_BTIME)
@@ -109,23 +94,15 @@ statx_birthtime(const rb_io_stat_data *stx)
 ```
 
 
-### Summary of System Calls
+## Takeaways
 
-| Operating System | Mechanism Used | Support Status |
-| --- | --- | --- |
-| **macOS / \*BSD** | Extended `stat(2)` (`st_birthtime`) | Supported |
-| **Linux (Ruby < 4.0)** | Standard `stat(2)` | Not Supported (`NotImplementedError: function is unimplemented on this machine`) |
-| **Linux (Ruby >= 4.0)** | `statx(2)` (`STATX_BTIME`) | Supported (Raises `NotImplementedError: birthtime is unimplemented on this filesystem` if filesystem doesn't support it) |
-| **Windows** | WinAPI (`GetFileTime`) | Supported |
+What appears to be a basic timestamp lookup illustrates the challenges of cross-platform runtime design. Because POSIX `stat(2)` never standardized file creation time, Ruby must juggle macOS extensions, Windows CRT peculiarities, Linux `statx(2)` system calls, and runtime filesystem bitmasks.
+
+The real lesson is that OS-level support is only half the battle: in modern Linux environments, capability checks must happen dynamically at the filesystem level.
 
 
-### PS
-
-Cross-platform support is hard. Even for something as basic as "when was this file created?", you have to deal with POSIX quirks, kernel differences, and various filesystems. It's neat to see how much low-level chaos Ruby implementations quietly handle so developers don't have to.
-
-
-### Useful Links
-* [TruffleRuby PR #4324](https://github.com/truffleruby/truffleruby/pull/4324)
-* [`stat(2)` Man Page](https://man7.org/linux/man-pages/man2/lstat.2.html)
-* [`stat(3type)` Struct Definition](https://man7.org/linux/man-pages/man3/stat.3type.html)
-* [`statx(2)` Man Page](https://man7.org/linux/man-pages/man2/statx.2.html)
+## Useful Links
+- [Ruby Feature #21205: Make File::Stat#birthtime available on Linux](https://bugs.ruby-lang.org/issues/21205)
+- [`stat(2)` Man Page](https://man7.org/linux/man-pages/man2/lstat.2.html)
+- [`stat(3type)` Struct Definition](https://man7.org/linux/man-pages/man3/stat.3type.html)
+- [`statx(2)` Man Page](https://man7.org/linux/man-pages/man2/statx.2.html)
