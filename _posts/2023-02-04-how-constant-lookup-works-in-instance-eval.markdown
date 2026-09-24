@@ -1,308 +1,206 @@
 ---
 layout: post
-title:  Как работает constant lookup в `#instance_eval`
+title:  "Why Constant Lookup in instance_eval Is More Complicated Than It Looks"
 date:   2023-02-04 15:10
-categories: Ruby
+categories: Ruby TruffleRuby
 ---
 
-Недавно плотно позанимался с методом `BasicObject#instance_eval`
-(полезный для построение DSL-ей в Ruby) и сделал для себя парочку
-открытий.
+Ruby developers frequently reach for `BasicObject#instance_eval` when building domain-specific languages or evaluating code dynamically. However, how Ruby resolves constants in code executed by `instance_eval` is practically undocumented and rarely behaves as engineers expect, even shifting between Ruby versions without much notice. While working on TruffleRuby compatibility with CRuby, I investigated how constant lookup works under the hood - uncovering an intricate resolution order and an unexpected quirk where defining a method silently flips constant lookup precedence.
 
-У меня создалось впечатление, что вместо принципа "наименьшего сюрприза"
-разработчики здесь использовали подход "а давайте всех удивим" или
-"пусть никто не догадается, как это работает". Особенно меня порадовало,
-как работает поиск констант в коде, который выполняется
-`#instance_eval`'ом. Не нашел ничего об этом в документации да и в
-интернете ничего путного не нагуглилось. Поэтому опишу здесь как
-`#instance_eval`, и особенно _constant lookup_, работает. Уточню, что
-речь идет о Ruby 3.1.
+### The Conflict: Caller Scope vs Receiver Hierarchy
 
-
-
-### Что мы знаем об `#instance_eval`
-
-Давайте вспомним, как `#instance_eval` должен работать. Согласно
-[документации](https://ruby-doc.org/core-3.1.1/BasicObject.html#method-i-instance_eval)
-`#instance_eval` выполняет код в _контексте_ объекта, а именно:
-* подменяет _self_ - теперь это сам объект - и
-* дает доступ к _instance variables_ объекта
-
-Также можно вызывать методы объекта, в том числе приватные, не указывая
-_receiver_'а.
+In Ruby, `BasicObject#instance_eval` evaluates code within the context of the receiver, binding `self` to that object and granting direct access to its instance variables and private methods:
 
 ```ruby
-class KlassWithSecret
-  def initialize
-    @secret = 99
-  end
-
-  private
-
-  def the_secret
-    "Ssssh! The secret is #{@secret}."
-  end
-end
-
-k = KlassWithSecret.new
-
-k.instance_eval { @secret }          #=> 99
-k.instance_eval { the_secret }       #=> "Ssssh! The secret is 99."
-k.instance_eval {|obj| obj == self } #=> true
+receiver.instance_eval("@secret") # => self is receiver, exposing its instance variables
 ```
 
-Метод `#instance_eval` принимает:
-* блок
-* или строчку кода
+When passed a *block*, standard closure rules apply: `self` and instance variables come from the receiver, while everything else - including constants - resolves against the lexical scope where the block was defined.
+
+When passed a *string*, however, there is no definition-site closure. The code executes dynamically in the context where `instance_eval` was called (the *caller*), but with `self` bound to the *receiver*.
+
+To see why string evaluation is so unusual, it helps to recall how standard constant resolution works in Ruby. When an unqualified constant is referenced, Ruby searches:
+
+- current and outer lexical scopes (class or module nesting)
+- the current class and its ancestor chain (up to `Object` and `BasicObject`)
+
+When evaluating a constant name inside `instance_eval`, two competing sources of constants collide:
+
+- the caller - the lexical scopes and class hierarchy where `instance_eval` was called
+- the receiver - the class hierarchy of the object on which `instance_eval` was called
+
+### The Resolution Order
+
+When resolving an unqualified constant inside a string passed to `instance_eval` (in Ruby 3.1+, without a singleton class), Ruby searches in the following order:
+
+1. the receiver's class
+2. the caller's immediate lexical scope
+3. outer lexical scopes enclosing the caller
+4. the receiver's superclasses and ancestors (up through `Object` and `BasicObject`)
+
+We can observe this order with a minimal reproduction:
 
 ```ruby
-k.instance_eval "@secret"          #=> 99
-k.instance_eval "the_secret"       #=> "Ssssh! The secret is 99."
-```
+module CallerOuter
+  FOO = :caller_outer
 
-Блок выполняется в контексте, где он определен, - это обычное поведение
-блока как замыкания. То есть все кроме _self_ и _instance variables_
-приходит из этого контекста - а это константы, локальные переменные и
-_class variables_.
+  module CallerInner
+    FOO = :caller_inner
 
-В отличие от блока, строка с кодом не привязана сама по себе к
-конкретному месту в коде, объекту или классу. И ожидаемо, она
-выполняется в контексте, где вызван сам метод `#instance_eval` (т.е то
-место, где стоит вызов `obj.instance_eval(...)`).
+    class CallerParent; FOO = :caller_parent; end
 
+    class Caller < CallerParent
+      FOO = :caller
 
-
-### Class variables lookup
-
-С _class variables_ все просто - _class variable lookup_ прямолинейно
-проходится по иерархии классов объекта, где вызван `#instance_eval`
-(_caller_). Именно _caller_'а, а не _receiver_'а. Помним же, что от
-_receiver_'а приходят только _self_ и _instance variables_. Поэтому
-остается только _caller_.
-
-В следующем примере _class variable_ находится в родительском классе
-вызывающего объекта:
-
-```ruby
-class A
-  @@foo = "class variable in class A"
-end
-
-class B < A
-  def get_class_variable
-    "".instance_eval "@@foo"
-  end
-end
-
-B.new.get_class_variable #  => "class variable in class A"
-```
-
-А вот с константами все сложнее.
-
-
-
-### Constant lookup
-
-Напомню логику _constant lookup_ в Ruby:
-* Ruby начинает искать константу в текущем _lexical scope_ (классе или
-модуле)
-* если не находит - тогда проверяет внешние _lexical scope_'ы.
-
-```ruby
-module A
-  FOO = 'I am defined in module A'
-
-  module B
-    module C
-      def self.get_constant
-        FOO
+      def resolve(receiver)
+        receiver.instance_eval("FOO")
       end
     end
   end
 end
 
-A::B::C.get_constant # => "I am defined in module A"
-```
+module ReceiverOuter
+  FOO = :receiver_outer
 
-Далее Ruby ищет константу в иерархии наследования - проверяет текущий
-класс, затем родительский класс итд до `Object` и `BasicObject`.
+  module ReceiverInner
+    FOO = :receiver_inner
 
-```ruby
-class A
-  FOO = 'I am defined in class A'
-end
+    class ReceiverParent; FOO = :receiver_parent; end
 
-class B < A
-  def get_constant
-    FOO
-  end
-end
-
-B.new.get_constant # => "I am defined in class A"
-```
-
-
-
-### Constant lookup в `#instance_eval`
-
-Если `#instance_eval` вызван с блоком - константы ищутся в контексте,
-где определен блок. Но когда `#instance_eval` вызван со строкой... Здесь
-и начинается самое интересное.
-
-```ruby
-object.instance_eval("FOO")
-```
-
-В случае с `#instance_eval` возникает неоднозначность - появляются два
-потенциальных источника констант - вызывающий объект (_caller_) и объект, на
-котором вызван `#instance_eval` (_receiver_), а точнее:
-* _lexical scope_'ы и иерархия классов объекта, **где** `#instance_eval`
-вызван (_caller scope_) с одной стороны,
-* и иерархия классов объекта, **на котором** `#instance_eval` вызван
-(_receiver_), с другой.
-
-И непонятно чего ждать от Ruby. Непонятно даже как это _должно_
-работать.
-
-Разработчики Ruby разрешили неоднозначность любопытным образом - Ruby
-использует и _caller_ и _receiver_. При вызове `#instance_eval` со строкой
-стандартный механизм _constant lookup_ расширяется и Ruby ищет константу
-в следующих местах и следующем порядке:
-* _singleton class_ _receiver_'а
-* класс _receiver_'а
-* _caller lexical scope_
-* внешние _lexical scope_'ы для _caller scope_'а
-* класс _receiver_'а (опять)
-* цепочка наследования класса _receiver_'а
-
-
-
-### Пример
-
-Рассмотрим на примере.
-
-```ruby
-module M1
-  module M2
-    class A
-    end
-
-    class B < A
-      def foo(obj)
-        obj.instance_eval "FOO"
-      end
+    class Receiver < ReceiverParent
+      FOO = :receiver_class
     end
   end
 end
 
-module M3
-  module M4
-    class C
-    end
-
-    class D < C
-    end
-  end
-end
+receiver = ReceiverOuter::ReceiverInner::Receiver.new
+caller_instance = CallerOuter::CallerInner::Caller.new
 ```
 
-Если вызвать метод `foo`, то:
-* _receiver_ - это объект класса `D`, который наследует класс `C` и вложен в
-модули `M4` и `M3` (внешние _lexical scope_'ы)
-* _caller scope_ - это класс `B`, который наследует класс `A` и вложен в
-модули `M2` и `M1`.
+When all constants are defined, the receiver's class takes precedence:
 
 ```ruby
-object = M3::M4::D.new
-M1::M2::B.new.foo(object)
+caller_instance.resolve(receiver)
+# => :receiver_class
 ```
 
-При поиске константы `FOO` классы и модули будут проверяться в следующем
-порядке:
-* _singleton class_ _receiver_'а (`object`)
-* `D` - класс _receiver_'а
-* `B` - _caller scope_
-* `M2` - внешний _lexical scope_ для класса `B`
-* `M1` - внешний _lexical scope_ для модуля `M2`
-* `D` - класс _receiver_'а
-* `C` - родительский класс класса `D`
-
-Наглядно это выглядит так:
+If we remove `FOO` from `Receiver`, Ruby does not check its superclass or outer modules; instead, it falls back to the caller's immediate lexical scope:
 
 ```ruby
-module M1
-  # 4
-
-  module M2
-    # 3
-
-    class A
-    end
-
-
-    class B < A # caller
-      # 2
-
-      def foo(obj)
-        obj.instance_eval "FOO"
-      end
-    end
-  end
-end
-
-
-module M3
-  module M4
-    class C
-      # 6
-    end
-
-
-    class D < C # receiver
-      # 1, 5
-    end
-  end
-end
+ReceiverOuter::ReceiverInner::Receiver.send(:remove_const, :FOO)
+caller_instance.resolve(receiver)
+# => :caller
 ```
 
+If we remove `FOO` from `Caller`, Ruby continues walking outward through the caller's lexical scopes, completely bypassing `CallerParent`:
 
+```ruby
+CallerOuter::CallerInner::Caller.send(:remove_const, :FOO)
+caller_instance.resolve(receiver)
+# => :caller_inner
 
-### Наблюдения
+CallerOuter::CallerInner.send(:remove_const, :FOO)
+caller_instance.resolve(receiver)
+# => :caller_outer
+```
 
-Замечу, что здесь игнорируются _lexical scope_'ы класса _receiver_'а
-(модули `M4` и `M3`) и иерархия наследования класса _caller scope_'а
-(класс `A`).
+Only after exhausting all caller lexical scopes does Ruby fall back to the receiver's inheritance chain:
 
-Еще один момент - механизм _constant lookup_ в `#instance_eval` в Ruby
-3.0 и ранее немного отличается. В Ruby 3.1 (как описано выше) поиск начинается с
-_singleton class_'а _receiver_'а, а затем идет класс _receiver_'а и
-_caller lexical scope_. В Ruby 3.0 второй шаг пропускался - после
-_singleton class_'а _receiver_'а проверялся сразу _caller lexical scope_. А
-класс _receiver_'а проверялся уже после цепочки _lexical scopes_, как
-часть иерархии наследования для _receiver_'а.
+```ruby
+CallerOuter.send(:remove_const, :FOO)
+caller_instance.resolve(receiver)
+# => :receiver_parent
+```
 
+Finally, if we remove `FOO` from `ReceiverParent`, Ruby raises a `NameError`. Even though `CallerParent`, `ReceiverInner`, and `ReceiverOuter` all define `FOO`, Ruby never checks them:
 
+```ruby
+ReceiverOuter::ReceiverInner::ReceiverParent.send(:remove_const, :FOO)
+caller_instance.resolve(receiver)
+# => NameError: uninitialized constant ReceiverOuter::ReceiverInner::Receiver::FOO
+```
 
-### PS
+An interesting observation is that CRuby omits several potential sources:
+- `CallerParent` because caller lookup checks lexical nesting, not inheritance
+- `ReceiverInner` and `ReceiverOuter` because `instance_eval` checks the receiver's class hierarchy, not where it was defined
 
-Ситуация с `#instance_eval` ожидаемая - получилось как получилось.
-Логика странная и сложная. Нигде не описана и меняется в минорных
-версиях Ruby. Трудно представить (и негде прочитать) мотивы
-разработчиков.
+### Under the Hood: Lazy Singletons in CRuby
 
-Возникают также вопросы:
-- а зачем ставить _singleton class_ и класс _receiver_'а на первое место?
-- и почему игнорируется иерархия классов _caller_'а? Почему бы и там еще
-не поискать?
+Why does the receiver's class sit *in front* of the caller's lexical scope, while the receiver's superclass sits *behind* it?
 
+The answer comes down to an internal optimization in CRuby and the way it tracks lexical scopes. In CRuby, lexical nesting is represented by an internal linked list of scope frames (known as `cref`). When evaluating a string with `instance_eval`, Ruby prepends a single scope frame for the receiver directly onto the caller's lexical chain.
 
+Prior to Ruby 3.1, calling `instance_eval` on an object always eagerly created a singleton class for that object so that any method defined inside the evaluated string would attach to the instance rather than its class. Because the singleton class was created up front, the new scope frame pointed to that singleton class. A singleton class almost never defines constants, so Ruby quickly moved past it to check the caller's lexical scopes. Only during the subsequent inheritance fallback did Ruby search the singleton class's ancestors, finally reaching the receiver's class and superclasses *after* the caller.
 
-### Ссылки
+In Ruby 3.1, John Hawthorn and Matthew Draper [optimized](https://github.com/ruby/ruby/pull/5146) this mechanism. Allocating a singleton class carries noticeable overhead, and most `instance_eval` invocations never define methods. To avoid that cost, Ruby stopped creating the singleton class immediately, instead marking the scope frame as a deferred singleton and storing the raw receiver object.
 
-- <http://valve.github.io/blog/2013/10/26/constant-resolution-in-ruby/>
-- <https://cirw.in/blog/constant-lookup.html>
-- <https://www.bigbinary.com/blog/understanding-instance-exec-in-ruby>
-- <https://github.com/oracle/truffleruby/commit/f9113553823106072f9979b72ccaae9a7e372119>
+This optimization had an unintended consequence for constant resolution. When walking the lexical chain, the VM asks each scope frame for its class. Under lazy singletons, the very first step of constant lookup now checks *either* the receiver's class or its singleton class, depending on whether a singleton class has already been created.
 
-[jekyll-gh]: https://github.com/mojombo/jekyll
-[jekyll]:    http://jekyllrb.com
+If no singleton class has been materialized yet, the VM returns the receiver's own class, placing it directly at the front of the lexical search - before the caller's lexical scopes. But if a singleton class already exists, the VM returns that singleton class instead, and on the final step the receiver's class and its ancestors are searched (instead of just its superclasses).
+
+We can see how this was implemented directly in CRuby (`eval_intern.h`). When retrieving the class for a scope frame, the VM calls `CREF_CLASS`:
+
+```c
+static inline VALUE
+CREF_CLASS(const rb_cref_t *cref)
+{
+    if (CREF_SINGLETON(cref)) {
+        return CLASS_OF(cref->klass_or_self);
+    }
+    return cref->klass_or_self;
+}
+```
+
+For lazy singletons, `CREF_SINGLETON(cref)` is true, directing the VM to `CLASS_OF(cref->klass_or_self)`. In CRuby, `CLASS_OF` returns the object's singleton class if one has already been allocated, or its basic class if not. That single check determines whether `Receiver` enters constant lookup on step 1 or step 4.
+
+### How Defining a Method Flips Lookup
+
+This lazy-singleton mechanism produces an unexpected side effect: materializing a singleton class on the receiver - whether beforehand or mid-evaluation - silently flips constant lookup precedence back to the pre-3.1 order.
+
+We can observe this in practice:
+
+```ruby
+class Receiver
+  FOO = :from_receiver
+end
+
+class Caller
+  FOO = :from_caller
+
+  def evaluate(receiver, code)
+    receiver.instance_eval(code)
+  end
+end
+
+caller_inst = Caller.new
+
+# 1. Default (lazy singleton): receiver class takes precedence
+puts caller_inst.evaluate(Receiver.new, "FOO")
+# => :from_receiver
+
+# 2. Materialized singleton: resolution flips to the caller
+obj = Receiver.new
+obj.singleton_class
+puts caller_inst.evaluate(obj, "FOO")
+# => :from_caller
+
+# 3. Defining a method: dynamically materializes singleton mid-execution
+puts caller_inst.evaluate(Receiver.new, "def hook; end; FOO")
+# => :from_caller
+```
+
+A seemingly unrelated operation - inspecting `obj.singleton_class` or defining a method inside the evaluated string - silently alters constant lookup order.
+
+### Compatibility in TruffleRuby
+
+This investigation began when addressing a test failure in Sprockets on TruffleRuby ([Issue #2810](https://github.com/truffleruby/truffleruby/issues/2810)). Sprockets evaluated ERB templates using `engine.result(a.instance_eval('binding'))`, which failed because TruffleRuby and CRuby resolved constants differently. Tracing the incompatibility required digging into CRuby's source code to see what the runtime was actually doing.
+
+To implement matching lookup in TruffleRuby, we [prepended](https://github.com/truffleruby/truffleruby/commit/f9113553823106072f9979b72ccaae9a7e372119) both the receiver's class and its singleton class (if one can exist) to the caller's lexical scope chain.
+
+This leads to an interesting divergence between the two implementations. Because TruffleRuby explicitly links both the singleton class and the receiver's class into the scope chain, it consistently follows the order: `singleton class -> receiver class -> caller scopes -> receiver ancestors`. In TruffleRuby, defining a method or inspecting `singleton_class` does not flip constant lookup: the receiver's class always remains ahead of the caller.
+
+The behavior was documented with new specs added to the *ruby/spec* test suite.
+
+### Summary
+
+Constant lookup is one of the most complex parts of Ruby, and `instance_eval` makes it even harder to grasp. With caller and receiver colliding, it is clear why the Ruby core team omitted steps like the caller's class and ancestors. It also shows how easily a minor optimization can introduce a breaking change when VM internals are tightly coupled. For DSL authors, the takeaway is simple: avoid unqualified constant lookup inside `instance_eval` strings and qualify constants explicitly (`::Foo`).
